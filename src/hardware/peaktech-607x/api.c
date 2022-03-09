@@ -836,7 +836,7 @@ out:
 	return;
 }
 
-static void peaktech_next_state(struct peaktech_device *devc);
+static gboolean peaktech_next_state(struct peaktech_device *devc);
 
 /**
  *  Callback for G_IO_OUT when device is in PEAKTECH_STATE_SEND state
@@ -881,10 +881,8 @@ static gboolean peaktech_send_data_cb(int _fd, int revents, void *devc_)
 	}
 
 	/* when all data have been sent, go to the next state */
-	if (devc->send_len == devc->send_pos) {
-		peaktech_next_state(devc);
-		return FALSE;
-	}
+	if (devc->send_len == devc->send_pos)
+		return peaktech_next_state(devc);
 
 	return TRUE;
 }
@@ -974,8 +972,7 @@ static gboolean peaktech_recv_inquiry_cb(int _fd, int revent, void *devc_)
 		break;
 	}
 
-	peaktech_next_state(devc);
-	return FALSE;
+	return peaktech_next_state(devc);
 }
 
 /**
@@ -1023,8 +1020,7 @@ static gboolean peaktech_recv_confirm_cb(int _fd, int revent, void *devc_)
 		break;;
 	}
 
-	peaktech_next_state(devc);
-	return FALSE;
+	return peaktech_next_state(devc);
 }
 
 /**
@@ -1079,7 +1075,7 @@ static gboolean _peaktech_next_state_0(void *devc_)
  *  It will add _peaktech_next_state_0() as an idle callback in the most
  *  cases.
  */
-static void peaktech_next_state(struct peaktech_device *devc)
+static gboolean peaktech_next_state(struct peaktech_device *devc)
 {
 	struct sr_dev_inst		*sdi = devc ? devc->sdi : NULL;
 
@@ -1093,7 +1089,7 @@ static void peaktech_next_state(struct peaktech_device *devc)
 	}
 
 	if (devc->state == PEAKTECH_STATE_ERR)
-		serial_drain(sdi->conn);
+		serial_flush(sdi->conn);
 
 	switch (devc->state) {
 	case PEAKTECH_STATE_INIT:
@@ -1105,10 +1101,11 @@ static void peaktech_next_state(struct peaktech_device *devc)
 
 	case PEAKTECH_STATE_SEND:
 		devc->state = PEAKTECH_STATE_SEND;
-		/* HACK: we can not reconfigure source direction but have to
-		 * remove and add them later.  This must happen in different
-		 * loops because removal happens delayed. */
-		g_idle_add(_peaktech_next_state_0, devc);
+		/* HACK: we can not reconfigure the source direction but have
+		 * to remove and add the source later.  This must happen in
+		 * different loops because removal happens delayed. */
+		g_idle_add_full(G_PRIORITY_HIGH, _peaktech_next_state_0,
+				devc, NULL);
 		break;
 
 	case PEAKTECH_STATE_EXPECT_CONFIRM:
@@ -1122,9 +1119,13 @@ static void peaktech_next_state(struct peaktech_device *devc)
 		 * because there are no active sources anymore).  Use
 		 * g_idle. */
 		devc->recv_pos = 0;
-		g_idle_add(_peaktech_next_state_0, devc);
+		g_idle_add_full(G_PRIORITY_HIGH, _peaktech_next_state_0,
+				devc, NULL);
 		break;
 	}
+
+	/* remove the actual source */
+	return FALSE;
 }
 
 /**

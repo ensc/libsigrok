@@ -24,6 +24,7 @@
 #define SERIALCOMM		"9600/8n1"
 
 #define _pt_packed		__attribute__((__packed__))
+#define _pt_const		__attribute__((__const__))
 
 struct pt_proto_hdr {
 	/* Always 0xf7 */
@@ -140,18 +141,29 @@ enum peaktech_chan_mode {
 };
 
 /**
- *  Calculates an implants a crc.
- *
- *  data must contain a struct pt_proto_hdr and struct pt_proto_tail.
+ *  Calculates a crc.
  */
-void peaktech_607x_proto_crc_set(void *data, size_t cnt);
+uint16_t peaktech_607x_proto_crc_get(void const *data, size_t cnt) _pt_const;
 
 /**
  *  Checks whether the crc is valid.
  *
  *  data must contain a struct pt_proto_hdr and struct pt_proto_tail.
  */
-bool peaktech_607x_proto_crc_check(void const *, size_t cnt);
+bool peaktech_607x_proto_crc_check(void const *, size_t cnt) _pt_const;
+
+#define pt_proto_crc_set(_a) do {					\
+		/* for type safety... */				\
+		struct pt_proto_hdr const	*_h = &(_a)->hdr;	\
+		struct pt_proto_tail const	*_t = &(_a)->tail;	\
+		uint16_t			_crc;			\
+									\
+		(void)_h;						\
+									\
+		_crc = peaktech_607x_proto_crc_get((_a), sizeof *(_a) - sizeof *_t); \
+									\
+		(_a)->tail.crc = cpu_to_le16(_crc);			\
+	} while (0)
 
 #define PT_PROTO_HDR(_model, _f_c, _a, _a_l)				\
 	((struct pt_proto_hdr) {					\
@@ -162,9 +174,8 @@ bool peaktech_607x_proto_crc_check(void const *, size_t cnt);
 		.addr_len	= (_a_l),				\
 	})								\
 
-#define PT_PROTO_TAIL(_crc)				\
+#define PT_PROTO_TAIL					\
 	((struct pt_proto_tail) {			\
-		.crc		= cpu_to_le16(_crc),	\
 		.magic		= 0xfd,			\
 	})
 
@@ -174,13 +185,13 @@ pt_proto_inquire_req(enum peaktech_model model)
 	struct pt_proto_inquire_req	req = {
 		.hdr	= PT_PROTO_HDR(model, 0x03, 0x04,
 				       (model) == PEAKTECH_MODEL_6070 ? 0x05 : 0x09),
-		.tail	= PT_PROTO_TAIL(0),
+		.tail	= PT_PROTO_TAIL,
 	};
+
+	pt_proto_crc_set(&req);
 
 	g_assert(model == PEAKTECH_MODEL_6070 ||
 		 model == PEAKTECH_MODEL_6075);
-
-	peaktech_607x_proto_crc_set(&req, sizeof req);
 
 	return req;
 }
@@ -191,8 +202,10 @@ _pt_proto_setup_req(enum peaktech_model model, uint8_t addr, uint16_t v)
 	struct pt_proto_setup_req	req = {
 		.hdr	= PT_PROTO_HDR(model, 0x0a, addr, 0x01),
 		.value	= cpu_to_be16(v),
-		.tail	= PT_PROTO_TAIL(0),
+		.tail	= PT_PROTO_TAIL,
 	};
+
+	pt_proto_crc_set(&req);
 
 	g_assert(model == PEAKTECH_MODEL_6070 ||
 		 model == PEAKTECH_MODEL_6075);
@@ -204,61 +217,40 @@ inline static struct pt_proto_setup_req
 pt_proto_volt_set_req(enum peaktech_model model, unsigned int ch,
 		      unsigned int volt)
 {
-	struct pt_proto_setup_req	req =
-		_pt_proto_setup_req(model, (ch) == 0 ? 0x09 : 0x0b,
-				    volt);
-
 	g_assert(ch == 0 ||
 		 (model == PEAKTECH_MODEL_6075 && ch == 1));
 
-	peaktech_607x_proto_crc_set(&req, sizeof req);
-
-	return req;
+	return _pt_proto_setup_req(model, (ch) == 0 ? 0x09 : 0x0b,
+				   volt);
 }
 
 inline static struct pt_proto_setup_req
 pt_proto_curr_set_req(enum peaktech_model model, unsigned int ch,
 		      unsigned int curr)
 {
-	struct pt_proto_setup_req	req =
-		_pt_proto_setup_req(model, (ch) == 0 ? 0x0a : 0x0c,
-				    curr);
-
 	g_assert(ch == 0 ||
 		 (model == PEAKTECH_MODEL_6075 && ch == 1));
 
-	peaktech_607x_proto_crc_set(&req, sizeof req);
-
-	return req;
+	return _pt_proto_setup_req(model, (ch) == 0 ? 0x0a : 0x0c, curr);
 }
 
 inline static struct pt_proto_setup_req
 pt_proto_output_en_req(enum peaktech_model model, bool ena)
 {
-	struct pt_proto_setup_req	req =
-		_pt_proto_setup_req(model, 0x1e, ena ? 1 : 0);
-
-	peaktech_607x_proto_crc_set(&req, sizeof req);
-
-	return req;
+	return _pt_proto_setup_req(model, 0x1e, ena ? 1 : 0);
 }
 
 inline static struct pt_proto_setup_req
 pt_proto_chan_mode_req(enum peaktech_model model,
 		       enum peaktech_chan_mode mode)
 {
-	struct pt_proto_setup_req	req =
-		_pt_proto_setup_req(model, 0x1f, mode);
-
 	/* only supported on 6075 */
 	g_assert(model == PEAKTECH_MODEL_6075);
 	g_assert(mode == PEAKTECH_CHAN_MODE_INDEPEDENT ||
 		 mode == PEAKTECH_CHAN_MODE_SERIES ||
 		 mode == PEAKTECH_CHAN_MODE_PARALLEL);
 
-	peaktech_607x_proto_crc_set(&req, sizeof req);
-
-	return req;
+	return _pt_proto_setup_req(model, 0x1f, mode);
 }
 
 #endif	/* LIBSIGROK_HARDWARE_PEAKTECH_6070X_PROTOCOL_H */
